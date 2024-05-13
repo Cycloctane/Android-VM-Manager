@@ -1,6 +1,7 @@
+import asyncio
 from datetime import datetime
 from typing import Optional
-from celery import result
+from celery.result import AsyncResult
 import redis.asyncio as redis
 import signal
 from uuid import uuid4
@@ -30,14 +31,14 @@ class ADBController:
         task_msg = TaskMsg(adb_task_id=adb_task_id, celery_uuid=celery_uuid, launch_at=datetime.now())
         mac = target_mac_address.replace(':', '-')
         async with redis.Redis.from_pool(redis_pool) as redis_conn:
-            target_ip_address = await redis_conn.get(f"ip:{mac}")
-            await redis_conn.set(f"task:{mac}", task_msg.model_dump_json())
+            redis_result = await asyncio.gather(redis_conn.get(f"ip:{mac}"),
+                                                redis_conn.set(f"task:{mac}", task_msg.model_dump_json()))
+            target_ip_address: str = redis_result[0]
         print(target_ip_address)
         ADBController.__launch.apply_async(args=(adb_task_id, target_ip_address), task_id=celery_uuid)
 
     @staticmethod
     def terminate(task_uuid: str) -> None:
-        task = result.AsyncResult(task_uuid)
+        task = AsyncResult(task_uuid)
         if task.state == "STARTED":
             task.revoke(terminate=True, signal=signal.SIGQUIT)
-

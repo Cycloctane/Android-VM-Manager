@@ -1,7 +1,8 @@
+import asyncio
 from pydantic import BaseModel
 from typing import Optional
 import redis.asyncio as redis
-from celery import result
+from celery.result import AsyncResult
 
 from ..db import redis_pool
 from ..task_manager import TaskInfo, TaskMsg, task_dict
@@ -34,14 +35,15 @@ class VMStatus(VMInfo):
         if self.isAndroid and self.power_status.is_running:
             mac = self.mac_address.replace(':', '-')
             async with redis.Redis.from_pool(redis_pool) as redis_conn:
-                ip: Optional[str] = await redis_conn.get(f"ip:{mac}")
-                task_msg_json: Optional[str] = await redis_conn.get(f"task:{mac}")
+                redis_result = await asyncio.gather(redis_conn.get(f"ip:{mac}"), redis_conn.get(f"task:{mac}"))
+                ip: Optional[str] = redis_result[0]
+                task_msg_json: Optional[str] = redis_result[1]
             self.ip_address = ip
             if ip is None or task_msg_json is None:
                 self.task_info = VMTaskStatus(on_task=False)
                 return
             task_msg = TaskMsg.model_validate_json(task_msg_json)
-            if result.AsyncResult(task_msg.celery_uuid).state != "STARTED":
+            if AsyncResult(task_msg.celery_uuid).state != "STARTED":
                 self.task_info = VMTaskStatus(on_task=False)
                 return
             self.task_info = VMTaskStatus(on_task=True, task_uuid=task_msg.celery_uuid,
@@ -55,4 +57,3 @@ class VMTaskRequest(BaseModel):
 
 class Message(BaseModel):
     msg: str
-
